@@ -1,0 +1,109 @@
+---
+title: "New York Police Department Shootings Analysis"
+date: "8/5/2023"
+output: html_document
+---
+
+#### This report analyzes shooting incident data from the New York Police Department to understand how shootings in New York have changed over time and how do they relate to location and demographic information.
+
+I used the following libraries to complete this report: tidyverse, dplyr, zoo, and lubridate.
+```{r setup, echo=FALSE, results='hide', message=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(dplyr)
+library(zoo)
+library(lubridate)
+```
+
+
+## Importing Data
+This assignment is an exploration of incidents recorded by the NYPD since 2006. Each incident report has information about the perpetrator, the victim, the location, the time, and a few more details about the crime. 
+
+I will start by importing and reading the NYPD Shooting Incidents data which is sourced from the City of New York's website.
+```{r get_data}
+url_in <- "https://data.cityofnewyork.us/api/views/833y-fsy8/rows.csv"
+shootings <- read_csv(url_in, show_col_types = FALSE)
+```
+## Data Exploration
+
+Here I can take a look at the type of variables included in the data set.
+```{r summary}
+summary(shootings)
+```
+
+I want to find the variables that do not have a lot of missing values, so we know which columns we can work with.
+```{r finding missing}
+sapply(shootings, function(x) sum(is.na(x)))
+```
+## Data Transformation
+
+Now let's tidy up the data set and select only the most relevant columns to work with. We should also change the date variable into the correct data type.
+```{r tidy and transform}
+shootings <- shootings%>%
+  select(c(OCCUR_DATE, OCCUR_TIME, BORO, VIC_AGE_GROUP, VIC_SEX, PERP_AGE_GROUP,PERP_SEX))%>%
+  mutate(OCCUR_DATE = mdy(OCCUR_DATE))
+```
+## Data Visualizations & Model
+
+### Shootings Over Time
+Next, we will take a look at how the rate of shootings in NYC changed over time. I will use a 30-day moving average to show overall patterns throughout the years and be less susceptible to outliers.
+```{r by_date}
+agg_tbl <- shootings %>% group_by(OCCUR_DATE) %>% 
+  summarise(total_count=n(),.groups = 'drop')%>%
+  mutate(num_shootings=rollmean(total_count, k = 30, fill = NA))
+
+agg_tbl%>%
+  ggplot(aes(x=OCCUR_DATE,y=num_shootings)) +
+  geom_line(aes(color="Number of Shootings")) +
+  theme (legend.position="bottom",
+  axis.text.x = element_text(angle = 90)) +
+  labs (title = "Shootings in NYC (30-day moving average)")
+```
+
+This graph demonstrates an oscillating pattern of shootings throughout each year, with spikes happening in the summer and dips during the winter. The large peak during the middle of 2020 raises questions about what specifically caused such a large spike in shootings during that time? 
+
+### Shootings by Borough
+I also would like to take a look at the breakdown of crime by the five different boroughs of NYC as well take a look at the breakdown by sex.
+```{r by_boroughs}
+ggplot(shootings, aes(x = BORO, fill=BORO))+
+  geom_bar(width = 0.5) +
+  labs (title = "Total Shootings by Borough",x="Borough",y="Total Shootings")+
+  theme(legend.position="none")
+```
+
+From this graph, we gather that the most shootings were recorded in Brooklyn and in the Bronx. This raised a new question as to how does this correlate to overall population, are there more crimes in Brooklyn simply because there are more people?
+
+To answer this question I went to the City of New York's website and sourced the population data by borough; the most recent data they had was for 2020. It had many unnecessary columns so I only selected the ones of interest.
+
+```{r population}
+pop <- read_csv("https://data.cityofnewyork.us/resource/xywu-7bv9.csv", show_col_types = FALSE)
+pop <- select(pop, c('borough','_2020','_2020_boro_share_of_nyc_total'))[2:6,]
+pop$borough <- toupper(pop$borough)
+shooting_by_boro <- count(shootings, BORO, sort = TRUE)
+colnames(shooting_by_boro) <- c('borough', 'num_crimes')
+boro <- merge(pop, shooting_by_boro, by = "borough")
+boro['shootings_per_capita'] <- boro['_2020']/boro$num_crimes
+boro
+
+ggplot(data=boro, aes(x=borough, y=shootings_per_capita, fill=borough)) +
+  geom_bar(stat="identity")+
+  labs (title = "Shootings per Capita by Borough",x="Borough",y="Shootings per Capita")+
+  theme(legend.position="none")
+```
+
+From this graph, we gather that despite there being a lot of crime in volume in both Brooklyn and the Bronx, there is more shootings per capita in Queens and Staten Island.
+
+### Logistic Regression Model
+```{r logistic_regression}
+keep <- c("18-24", "25-44", "45-64", "65+", "<18")
+shootings <- shootings[shootings$PERP_AGE_GROUP %in% keep, ]
+logit_tbl <- shootings %>%
+  group_by(PERP_SEX, PERP_AGE_GROUP) %>%
+  summarise(total_count=n(),.groups = 'drop')
+mylogit <- glm(total_count ~ PERP_SEX + PERP_AGE_GROUP, data = logit_tbl)
+summary(mylogit)
+```
+I decided to further delve into perpetrator's demographic information to understand how it would work to predict crime. I used a logistic regression model to make these predictions analyzing both the perpetrator's age group and sex in relation to the total number of crimes. Using sex as a predictor we see a strong positive relationship between the perpetrator being male and likelihood to commit a crime when compared to their female counterparts. When analyzing the different age groups we can see that the younger age groups are more likely to have commit a crime than their older counterparts. These findings do not suggest that if someone is a male or younger they will commit a crime, but rather if a crime has been committed it is more likely to have been done by a male or someone in the younger age groups when compared to the alternatives.
+
+## Conclusion and Bias
+My belief is that when dealing with policing data it is inherently political. Having done data science work analyzing NYPD conduct in the past I have uncovered racist policing practices, with a disproportionately increased presence in black and brown neighborhoods. [(Here is a link to the project I worked on.)]( https://decoders.amnesty.org/projects/decode-surveillance) To mitigate any influence this could have on my analysis on the NYPD shooting data, I decided to omit race as a factor to analyze in the visualizations or the models. From the analysis conducted throughout this report it becomes clear how the amount of crime differs in the different boroughs and how it has changed over time. As well we have gotten a bit of insight into strong predictors of which groups are more likely to commit crimes as far as age and sex are concerned.
